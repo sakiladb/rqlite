@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-ARG RQLITE_VERSION=latest
+ARG RQLITE_VERSION=10.2.0
 
 # ---- Builder stage: boot rqlite, seed via /boot, cleanly shut down ----
 FROM rqlite/rqlite:${RQLITE_VERSION} AS builder
