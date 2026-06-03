@@ -1,0 +1,61 @@
+# Brings up a 3-node sakiladb/rqlite cluster.
+# rqlite1 is the leader (uses the baked Sakila data dir).
+# rqlite2 / rqlite3 mount empty volumes that mask the baked data,
+# so they come up empty and receive Sakila via Raft snapshot from the leader.
+
+services:
+  rqlite1:
+    image: sakiladb/rqlite:latest
+    container_name: rqlite1
+    ports:
+      - "4001:4001"
+      - "4002:4002"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4001/readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  rqlite2:
+    image: sakiladb/rqlite:latest
+    container_name: rqlite2
+    ports:
+      - "4003:4001"
+    volumes:
+      - rqlite2_data:/rqlite/file/data
+    command:
+      - "-auth=/rqlite/auth.json"
+      - "-node-id=2"
+      - "-http-addr=0.0.0.0:4001"
+      - "-raft-addr=0.0.0.0:4002"
+      - "-http-adv-addr=rqlite2:4001"
+      - "-raft-adv-addr=rqlite2:4002"
+      - "-join=rqlite1:4002"
+      - "-join-as=sakila"
+    depends_on:
+      rqlite1:
+        condition: service_healthy
+
+  rqlite3:
+    image: sakiladb/rqlite:latest
+    container_name: rqlite3
+    ports:
+      - "4005:4001"
+    volumes:
+      - rqlite3_data:/rqlite/file/data
+    command:
+      - "-auth=/rqlite/auth.json"
+      - "-node-id=3"
+      - "-http-addr=0.0.0.0:4001"
+      - "-raft-addr=0.0.0.0:4002"
+      - "-http-adv-addr=rqlite3:4001"
+      - "-raft-adv-addr=rqlite3:4002"
+      - "-join=rqlite1:4002"
+      - "-join-as=sakila"
+    depends_on:
+      rqlite1:
+        condition: service_healthy
+
+volumes:
+  rqlite2_data:
+  rqlite3_data:
