@@ -22,7 +22,7 @@ services:
     ports:
       - "4003:4001"
     volumes:
-      - rqlite2_data:/rqlite/file/data
+      - rqlite2_data:/var/lib/sakiladb/data
     command:
       - "-auth=/rqlite/auth.json"
       - "-node-id=2"
@@ -42,7 +42,7 @@ services:
     ports:
       - "4005:4001"
     volumes:
-      - rqlite3_data:/rqlite/file/data
+      - rqlite3_data:/var/lib/sakiladb/data
     command:
       - "-auth=/rqlite/auth.json"
       - "-node-id=3"
