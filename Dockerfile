@@ -6,12 +6,11 @@ ARG RQLITE_VERSION=latest
 FROM rqlite/rqlite:${RQLITE_VERSION} AS builder
 
 USER root
-RUN apk add --no-cache curl bash
+RUN apk add --no-cache curl
 
 COPY sakila.db /seed/sakila.db
 COPY auth.json /rqlite/auth.json
 
-ENV NODE_ID=1
 ENV DATA_DIR=/rqlite/file/data
 
 RUN mkdir -p "$DATA_DIR" && \
@@ -27,7 +26,9 @@ RUN mkdir -p "$DATA_DIR" && \
         fi; \
         sleep 1; \
     done && \
-    curl -sf http://localhost:4001/readyz >/dev/null && \
+    if ! curl -sf http://localhost:4001/readyz >/dev/null; then \
+        echo "ERROR: rqlite did not become ready within 60s"; exit 1; \
+    fi && \
     echo "Booting Sakila from /seed/sakila.db..." && \
     curl -sf -XPOST -H 'Transfer-Encoding: chunked' \
         --upload-file /seed/sakila.db \
