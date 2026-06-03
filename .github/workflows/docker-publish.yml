@@ -32,9 +32,13 @@ jobs:
 
       # Install the cosign tool except on PR
       # https://github.com/sigstore/cosign-installer
+      # Pinned to v3 (cosign v2.x) so we get the current Sigstore TUF root.
+      # The old v2.8.1 installer shipped cosign v1.13.1, which embeds a
+      # rotated-out TUF key and fails Fulcio cert verification with
+      # "updating to TUF remote mirror: invalid key".
       - name: Install cosign
         if: ${{ startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request' }}
-        uses: sigstore/cosign-installer@v2.8.1
+        uses: sigstore/cosign-installer@v3
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -86,8 +90,7 @@ jobs:
       # https://github.com/sigstore/cosign
       - name: Sign the published Docker image
         if: ${{ startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request' }}
-        env:
-          COSIGN_EXPERIMENTAL: "true"
-        # This step uses the identity token to provision an ephemeral certificate
-        # against the sigstore community Fulcio instance.
-        run: echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign {}@${{ steps.build-and-push.outputs.digest }}
+        # cosign v2 keyless signing uses the GHA OIDC token automatically
+        # (no COSIGN_EXPERIMENTAL needed). --yes skips v2's interactive
+        # confirmation prompt, which would otherwise hang in CI.
+        run: echo "${{ steps.meta.outputs.tags }}" | xargs -I {} cosign sign --yes {}@${{ steps.build-and-push.outputs.digest }}
