@@ -44,6 +44,30 @@
 
 If any assumption fails, stop and flag it rather than improvising — the spec discusses fallbacks.
 
+## Empirical findings from Task 3 execution (must be honored by downstream tasks)
+
+These were discovered when Task 3 actually built. Update everything else accordingly.
+
+- **rqlite v10 `/db/query` does not accept `--data-urlencode` POSTs** (those return 400 "invalid JSON body"). Use the **GET** form instead:
+  ```
+  curl -sf -u sakila:p_ssW0rd 'http://localhost:PORT/db/query?level=strong&q=SELECT+count(*)+FROM+actor'
+  ```
+  All curl smoke tests in Tasks 5 / 6 / Final verification must use this GET form. `SELECT ... LIMIT 3` is `q=SELECT+first_name,last_name+FROM+actor+LIMIT+3`.
+- **`/readyz` returns a four-line status body**, not a single `[+ok]`:
+  ```
+  [+]node ok
+  [+]leader ok
+  [+]store ok
+  [+]db ok
+  ```
+  Tasks 5 / Final verification should reflect this in any "expected output" comparisons.
+- **`/status` JSON shape (rqlite v10):**
+  - HTTP advertise address → `s['cluster']['api_addr']` (e.g. `rqlite1:4001`)
+  - Raft advertise address → `s['cluster']['addr']` (e.g. `rqlite1:4002`)
+  - Raft role string → `s['store']['raft']['state']` (still as the design assumed — `Leader` / `Follower`)
+  Use these paths in Task 6 / README rather than the speculative `s['store']['raft']['transport']['local_addr']` in earlier drafts.
+- **Base image uid is 1000 (`rqlite`).** Task 3's Dockerfile handles this with `chown -R 1000:1000 "$DATA_DIR"` in the builder and `COPY --chown=rqlite:rqlite ...` in the final stage. No downstream task should need to revisit it, but be aware if you debug a "permission denied on /rqlite/file/data/extensions" failure.
+
 ---
 
 ## File Structure
@@ -469,8 +493,8 @@ docker run -p 4001:4001 -p 4002:4002 \
 Verify:
 
 ```shell
-$ curl -u sakila:p_ssW0rd 'http://localhost:4001/db/query?level=strong' \
-       --data-urlencode 'q=SELECT first_name, last_name FROM actor LIMIT 3'
+$ curl -u sakila:p_ssW0rd \
+       'http://localhost:4001/db/query?level=strong&q=SELECT+first_name,last_name+FROM+actor+LIMIT+3'
 {"results":[{"columns":["first_name","last_name"],"types":["TEXT","TEXT"],
   "values":[["PENELOPE","GUINESS"],["NICK","WAHLBERG"],["ED","CHASE"]]}]}
 ```
@@ -691,8 +715,7 @@ Run:
 for port in 4001 4003 4005; do
     printf 'port %s actor count: ' "$port"
     curl -s -u sakila:p_ssW0rd \
-        "http://localhost:$port/db/query?level=strong" \
-        --data-urlencode 'q=SELECT count(*) FROM actor' \
+        "http://localhost:$port/db/query?level=strong&q=SELECT+count(*)+FROM+actor" \
         | python3 -c "import sys,json; print(json.load(sys.stdin)['results'][0]['values'][0][0])"
 done
 ```
@@ -826,8 +849,9 @@ Run:
 ```bash
 ./docker-run.sh
 sleep 5
-curl -sf -u sakila:p_ssW0rd 'http://localhost:4001/db/query?level=strong' \
-    --data-urlencode 'q=SELECT count(*) FROM actor' | grep -q '\[\[200\]\]' && echo "single-node OK"
+curl -sf -u sakila:p_ssW0rd \
+    'http://localhost:4001/db/query?level=strong&q=SELECT+count(*)+FROM+actor' \
+    | grep -q '\[\[200\]\]' && echo "single-node OK"
 docker stop $(docker ps -q --filter ancestor=sakiladb/rqlite:latest)
 ```
 
@@ -841,8 +865,9 @@ docker tag sakiladb/rqlite:dev sakiladb/rqlite:latest
 docker compose -f cluster-compose.yml up -d
 sleep 15
 for port in 4001 4003 4005; do
-    curl -sf -u sakila:p_ssW0rd "http://localhost:$port/db/query?level=weak" \
-        --data-urlencode 'q=SELECT count(*) FROM actor' | grep -q '\[\[200\]\]' \
+    curl -sf -u sakila:p_ssW0rd \
+        "http://localhost:$port/db/query?level=weak&q=SELECT+count(*)+FROM+actor" \
+        | grep -q '\[\[200\]\]' \
         && echo "port $port OK" || echo "port $port FAIL"
 done
 docker compose -f cluster-compose.yml down -v
