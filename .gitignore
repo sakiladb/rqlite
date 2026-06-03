@@ -1,0 +1,10 @@
+# OS / editor noise
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Build artifacts
+*.tar
+*.log
