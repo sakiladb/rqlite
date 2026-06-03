@@ -78,4 +78,4 @@ docker compose -f cluster-compose.yml down -v
 
 ## Image tags
 
-See [Docker Hub tags](https://hub.docker.com/r/sakiladb/rqlite/tags). `:latest` tracks the latest rqlite release; semver tags (`:8`, etc.) pin to a specific rqlite major version.
+See [Docker Hub tags](https://hub.docker.com/r/sakiladb/rqlite/tags). `:latest` tracks the latest rqlite release; semver tags (`:10`, etc.) pin to a specific rqlite major version.
