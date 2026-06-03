@@ -68,6 +68,12 @@ These were discovered when Task 3 actually built. Update everything else accordi
   Use these paths in Task 6 / README rather than the speculative `s['store']['raft']['transport']['local_addr']` in earlier drafts.
 - **Base image uid is 1000 (`rqlite`).** Task 3's Dockerfile handles this with `chown -R 1000:1000 "$DATA_DIR"` in the builder and `COPY --chown=rqlite:rqlite ...` in the final stage. No downstream task should need to revisit it, but be aware if you debug a "permission denied on /rqlite/file/data/extensions" failure.
 
+Discovered while executing Task 6:
+
+- **`curl` is not in the `rqlite/rqlite` final image** — only `wget` is. The compose healthcheck must be `["CMD", "wget", "-qO-", "http://localhost:4001/readyz"]`, not `["CMD", "curl", "-sf", ...]` as earlier plan drafts said.
+- **The `-join` flag takes the Raft address (port 4002), not an HTTP URL.** The form is bare `host:port` per `rqlited --help` ("Comma-delimited list of nodes, in host:port form"). For our cluster that's `-join=rqlite1:4002`. The earlier `-join=http://rqlite1:4001` form rqlite v10 rejects outright.
+- **`-join-as=<username>`** is sufficient on its own — no separate password flag. The joining node looks up the password in its own baked `auth.json`.
+
 ---
 
 ## File Structure
