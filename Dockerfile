@@ -9,9 +9,14 @@ USER root
 RUN apk add --no-cache curl
 
 COPY sakila.db /seed/sakila.db
-COPY auth.json /rqlite/auth.json
+COPY auth.json /build/auth.json
 
-ENV DATA_DIR=/rqlite/file/data
+# Bake into /build/data, NOT /rqlite/file/data. The base image declares
+# VOLUME /rqlite/file, which means RUN writes under that path are
+# discarded from the layer (BuildKit/buildx semantics, especially with
+# multi-arch). The final stage COPYs from /build/data into the real
+# data dir as the last instruction, which IS layer-persistent.
+ENV DATA_DIR=/build/data
 
 RUN mkdir -p "$DATA_DIR" && \
     rqlited -node-id 1 \
@@ -53,8 +58,8 @@ RUN mkdir -p "$DATA_DIR" && \
 # ---- Final stage: ship the baked data dir + auth config ----
 FROM rqlite/rqlite:${RQLITE_VERSION}
 
-COPY --chown=rqlite:rqlite --from=builder /rqlite/file/data /rqlite/file/data
-COPY --chown=rqlite:rqlite --from=builder /rqlite/auth.json /rqlite/auth.json
+COPY --chown=rqlite:rqlite --from=builder /build/data /rqlite/file/data
+COPY --chown=rqlite:rqlite --from=builder /build/auth.json /rqlite/auth.json
 
 EXPOSE 4001 4002
 
