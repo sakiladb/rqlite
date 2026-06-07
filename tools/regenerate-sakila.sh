@@ -3,9 +3,10 @@
 # (closes gh#2: NUMERIC affinity, missing AUTOINCREMENT, missing DEFAULTs).
 #
 # Reads existing data from $SRC and writes a fresh database at $DST.
-# Schema is rebuilt from the embedded canonical DDL; row data is copied
-# verbatim via `INSERT ... SELECT * FROM src.<table>`. Indexes, triggers,
-# and views are recreated identical to the source.
+# The embedded DDL is the source of truth; row data is copied verbatim via
+# `INSERT ... SELECT * FROM src.<table>`. Indexes, triggers, and views are
+# also embedded literals — if the source schema drifts, this script won't
+# notice. $DST is unconditionally removed before being rebuilt.
 #
 # Usage:
 #   tools/regenerate-sakila.sh [SRC] [DST]
@@ -23,11 +24,27 @@ if [[ ! -f "$SRC" ]]; then
     exit 1
 fi
 
+# A path with a single quote would break out of the ATTACH SQL literal in
+# Phase 2, and would also let a hostile caller inject arbitrary statements.
+# Cheap to reject up front.
+if [[ "$SRC" == *\'* || "$DST" == *\'* ]]; then
+    echo "ERROR: SRC and DST paths must not contain single quotes" >&2
+    exit 1
+fi
+
+# Same-file would `rm -f` the source before Phase 2 attaches it.
+if [[ "$SRC" -ef "$DST" ]]; then
+    echo "ERROR: SRC and DST resolve to the same file: $SRC" >&2
+    exit 1
+fi
+
 rm -f "$DST"
 
-# --- Phase 1: canonical schema (tables only; indexes/triggers/views come after data) ---
-sqlite3 "$DST" <<'SQL'
-PRAGMA foreign_keys = OFF;
+# --- Phase 1: canonical schema (tables only). Indexes/triggers/views are
+# created AFTER the data load — the `*_trigger_ai` triggers rewrite
+# `last_update` to NOW() on every INSERT, so creating them up front would
+# clobber every copied row. ---
+sqlite3 -bail "$DST" <<'SQL'
 BEGIN;
 
 CREATE TABLE actor (
@@ -200,14 +217,17 @@ CREATE TABLE film_category (
 COMMIT;
 SQL
 
-# --- Phase 2: copy data from $SRC. ATTACH path needs shell interpolation, so
-# this heredoc is unquoted; double-quotes are escaped to keep the shell happy. ---
-sqlite3 "$DST" <<SQL
+# --- Phase 2: copy data from $SRC. The heredoc is unquoted so that
+# $SRC expands; the path has already been rejected if it contains a
+# single quote, so the SQL-string interpolation is safe. FKs are
+# disabled because staff/store form a real reference cycle. ---
+sqlite3 -bail "$DST" <<SQL
 ATTACH DATABASE '$SRC' AS src;
 PRAGMA foreign_keys = OFF;
 BEGIN;
 
--- Order chosen to be FK-friendly (not strictly required with FKs off, but tidy).
+-- Parent-before-child where the dependency graph is acyclic.
+-- staff <-> store is a true cycle, so we rely on FKs being OFF.
 INSERT INTO country     SELECT * FROM src.country;
 INSERT INTO city        SELECT * FROM src.city;
 INSERT INTO address     SELECT * FROM src.address;
@@ -230,7 +250,7 @@ DETACH DATABASE src;
 SQL
 
 # --- Phase 3: indexes, triggers, views (verbatim from source) ---
-sqlite3 "$DST" <<'SQL'
+sqlite3 -bail "$DST" <<'SQL'
 BEGIN;
 
 CREATE INDEX idx_actor_last_name ON actor(last_name);
@@ -440,38 +460,83 @@ GROUP BY
 , c.city||','||cy.country
 , m.first_name||' '||m.last_name;
 
-COMMIT;
+CREATE VIEW staff_list
+AS
+SELECT s.staff_id AS ID,
+       s.first_name||' '||s.last_name AS name,
+       a.address AS address,
+       a.postal_code AS zip_code,
+       a.phone AS phone,
+       city.city AS city,
+       country.country AS country,
+       s.store_id AS SID
+FROM staff AS s JOIN address AS a ON s.address_id = a.address_id JOIN city ON a.city_id = city.city_id
+    JOIN country ON city.country_id = country.country_id;
 
-PRAGMA foreign_keys = ON;
+COMMIT;
 SQL
 
 # --- Phase 4: verify and compact ---
 echo "Verifying $DST..."
 
-fk_violations=$(sqlite3 "$DST" "PRAGMA foreign_key_check;" | wc -l | tr -d ' ')
-if [[ "$fk_violations" -ne 0 ]]; then
-    echo "ERROR: foreign key check failed ($fk_violations violations)" >&2
-    sqlite3 "$DST" "PRAGMA foreign_key_check;" >&2
+# `var=$(sqlite3 ...)` does NOT trigger `set -e` on sqlite3 failure — the
+# exit code disappears into the command substitution. Each capture below
+# checks the exit code explicitly to avoid silently treating an open/parse
+# failure as "clean".
+
+if ! fk_check=$(sqlite3 -bail "$DST" "PRAGMA foreign_key_check;"); then
+    echo "ERROR: foreign_key_check failed to run against $DST" >&2
+    exit 1
+fi
+if [[ -n "$fk_check" ]]; then
+    echo "ERROR: foreign key violations:" >&2
+    echo "$fk_check" >&2
     exit 1
 fi
 
-integrity=$(sqlite3 "$DST" "PRAGMA integrity_check;")
+if ! integrity=$(sqlite3 -bail "$DST" "PRAGMA integrity_check;"); then
+    echo "ERROR: integrity_check failed to run against $DST" >&2
+    exit 1
+fi
 if [[ "$integrity" != "ok" ]]; then
     echo "ERROR: integrity check failed: $integrity" >&2
     exit 1
 fi
 
-# Row-count parity vs source.
+# Row-count parity vs source. List must stay in sync with the Phase 1
+# CREATE TABLEs above.
 for t in actor address category city country customer film film_actor film_category film_text inventory language payment rental staff store; do
-    src_n=$(sqlite3 "$SRC" "SELECT COUNT(*) FROM $t;")
-    dst_n=$(sqlite3 "$DST" "SELECT COUNT(*) FROM $t;")
+    if ! src_n=$(sqlite3 -bail "$SRC" "SELECT COUNT(*) FROM $t;"); then
+        echo "ERROR: failed to count $t in $SRC" >&2
+        exit 1
+    fi
+    if ! dst_n=$(sqlite3 -bail "$DST" "SELECT COUNT(*) FROM $t;"); then
+        echo "ERROR: failed to count $t in $DST" >&2
+        exit 1
+    fi
     if [[ "$src_n" != "$dst_n" ]]; then
         echo "ERROR: row-count mismatch in $t: src=$src_n dst=$dst_n" >&2
         exit 1
     fi
 done
 
-sqlite3 "$DST" "VACUUM;"
+# View parity vs source: catches the class of mistake where Phase 3 forgets
+# to recreate one of the embedded views.
+if ! src_views=$(sqlite3 -bail "$SRC" "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;"); then
+    echo "ERROR: failed to list views in $SRC" >&2
+    exit 1
+fi
+if ! dst_views=$(sqlite3 -bail "$DST" "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;"); then
+    echo "ERROR: failed to list views in $DST" >&2
+    exit 1
+fi
+if [[ "$src_views" != "$dst_views" ]]; then
+    echo "ERROR: view set differs from source" >&2
+    diff <(echo "$src_views") <(echo "$dst_views") >&2 || true
+    exit 1
+fi
+
+sqlite3 -bail "$DST" "VACUUM;"
 
 echo "OK. $DST regenerated from $SRC."
 echo "  size: $(wc -c < "$DST" | tr -d ' ') bytes"
