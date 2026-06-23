@@ -88,6 +88,13 @@ verify_all
 stop_node
 
 # ---- Phase 2: gate — verify the PERSISTED artifact, fresh process ----
+# Restart a brand-new rqlited from the baked dir (exactly what the shipped
+# image does) and re-assert the row counts. Serving the correct counts from a
+# cold start IS the proof that the bake persisted: an empty or incomplete dir
+# (gh#8) bootstraps a fresh node, verify_all then fails on the missing tables,
+# and the build aborts. We deliberately gate on this observable behaviour
+# rather than grepping rqlited's startup log for "preexisting node state" —
+# that check was redundant with verify_all and brittle across rqlite versions.
 echo "Phase 2: verifying persisted artifact (the dir that gets shipped)"
 if [ ! -s "$DATA_DIR/db.sqlite" ]; then
     echo "ERROR: $DATA_DIR/db.sqlite is missing or empty after seed" >&2
@@ -96,21 +103,7 @@ if [ ! -s "$DATA_DIR/db.sqlite" ]; then
 fi
 start_node
 wait_ready
-# Fail loudly if rqlited reports a FRESH node. The negative log line
-# ("no preexisting node state detected ...") contains the positive substring
-# ("preexisting node state detected"), so a naive positive grep matches both
-# and is useless — check the negative message explicitly first.
-if grep -q 'no preexisting node state detected' /tmp/rqlited.log; then
-    echo "ERROR: restarted node reports NO preexisting state — bake did not persist" >&2
-    cat /tmp/rqlited.log >&2 || true
-    exit 1
-fi
-if ! grep -q 'preexisting node state detected' /tmp/rqlited.log; then
-    echo "ERROR: restarted node never logged a preexisting-state check — cannot confirm persistence" >&2
-    cat /tmp/rqlited.log >&2 || true
-    exit 1
-fi
-echo "  restarted node detected preexisting state; verifying served data..."
+echo "  restarted from baked dir; verifying served data..."
 verify_all
 stop_node
 
