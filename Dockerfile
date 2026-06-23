@@ -3,18 +3,28 @@
 ARG RQLITE_VERSION=10.2.0
 
 # ---- Builder stage: boot rqlite, seed via /boot, cleanly shut down ----
-FROM rqlite/rqlite:${RQLITE_VERSION} AS builder
+#
+# Pinned to $BUILDPLATFORM so the bake ALWAYS runs on the native build host,
+# never under QEMU. rqlited is a full Go server (raft, BoltDB mmap, HTTP); under
+# QEMU user-mode emulation it reports ready but then fails to serve queries
+# after /boot, so an emulated arm64 bake times out (gh#8 was this failure,
+# silently shipped empty by the old `|| true`). The baked data dir is
+# architecture-independent — db.sqlite and the raft snapshots are SQLite, and
+# raft.db is a little-endian/4K-page BoltDB file readable by both amd64 and
+# arm64 — so we bake once here and COPY it into every target image below.
+FROM --platform=$BUILDPLATFORM rqlite/rqlite:${RQLITE_VERSION} AS builder
 
 # Cache-bust marker. Bumping this string forces every downstream layer
 # to rebuild even when BuildKit's per-instruction hashing matches an
 # older cache entry (which happened to v10.0.1 — see commit history).
-LABEL build.cachebust="v10.0.3-2026-06-03"
+LABEL build.cachebust="v10.0.5-2026-06-23"
 
 USER root
 RUN apk add --no-cache curl
 
 COPY sakila.db /staging/sakila.db
 COPY auth.json /staging/auth.json
+COPY tools/bake.sh /staging/bake.sh
 
 # Bake into /staging/sakila-data, NOT /rqlite/file/data. The base
 # image declares VOLUME /rqlite/file, which means:
@@ -28,43 +38,12 @@ COPY auth.json /staging/auth.json
 # new non-VOLUME path (/var/lib/sakiladb/data) and sets
 # DATA_DIR so rqlited reads from there. The /rqlite/file VOLUME
 # inherited from the base image is left unused (harmless).
-RUN mkdir -p /staging/sakila-data && \
-    rqlited -node-id 1 \
-        -http-addr 0.0.0.0:4001 -raft-addr 0.0.0.0:4002 \
-        -http-adv-addr rqlite1:4001 -raft-adv-addr rqlite1:4002 \
-        /staging/sakila-data & \
-    PID=$! && \
-    echo "Waiting for rqlite to be ready..." && \
-    for i in $(seq 1 60); do \
-        if curl -sf http://localhost:4001/readyz >/dev/null 2>&1; then \
-            echo "rqlite ready after ${i}s"; break; \
-        fi; \
-        sleep 1; \
-    done && \
-    if ! curl -sf http://localhost:4001/readyz >/dev/null; then \
-        echo "ERROR: rqlite did not become ready within 60s"; exit 1; \
-    fi && \
-    echo "Booting Sakila from /staging/sakila.db..." && \
-    curl -sf -XPOST -H 'Transfer-Encoding: chunked' \
-        --upload-file /staging/sakila.db \
-        http://localhost:4001/boot && \
-    sleep 2 && \
-    echo "Verifying row counts..." && \
-    curl -sf \
-        'http://localhost:4001/db/query?level=strong&q=SELECT+count(*)+FROM+actor' \
-        | grep -q '"values":\[\[200\]\]' && \
-    curl -sf \
-        'http://localhost:4001/db/query?level=strong&q=SELECT+count(*)+FROM+film' \
-        | grep -q '"values":\[\[1000\]\]' && \
-    curl -sf \
-        'http://localhost:4001/db/query?level=strong&q=SELECT+count(*)+FROM+rental' \
-        | grep -q '"values":\[\[16044\]\]' && \
-    echo "Sakila baked successfully" && \
-    kill -TERM "$PID" && \
-    wait "$PID" 2>/dev/null || true && \
-    sync && \
-    chown -R 1000:1000 /staging/sakila-data && \
-    ls -la /staging/sakila-data
+#
+# bake.sh seeds the data, then restarts a fresh node from the
+# persisted dir and re-verifies — so an empty/incomplete bake
+# (gh#8) fails the build instead of being published. `set -eu`
+# inside makes every step fatal.
+RUN sh /staging/bake.sh
 
 # ---- Final stage: ship the baked data dir + auth config ----
 FROM rqlite/rqlite:${RQLITE_VERSION}
