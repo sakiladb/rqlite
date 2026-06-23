@@ -3,12 +3,21 @@
 ARG RQLITE_VERSION=10.2.0
 
 # ---- Builder stage: boot rqlite, seed via /boot, cleanly shut down ----
-FROM rqlite/rqlite:${RQLITE_VERSION} AS builder
+#
+# Pinned to $BUILDPLATFORM so the bake ALWAYS runs on the native build host,
+# never under QEMU. rqlited is a full Go server (raft, BoltDB mmap, HTTP); under
+# QEMU user-mode emulation it reports ready but then fails to serve queries
+# after /boot, so an emulated arm64 bake times out (gh#8 was this failure,
+# silently shipped empty by the old `|| true`). The baked data dir is
+# architecture-independent — db.sqlite and the raft snapshots are SQLite, and
+# raft.db is a little-endian/4K-page BoltDB file readable by both amd64 and
+# arm64 — so we bake once here and COPY it into every target image below.
+FROM --platform=$BUILDPLATFORM rqlite/rqlite:${RQLITE_VERSION} AS builder
 
 # Cache-bust marker. Bumping this string forces every downstream layer
 # to rebuild even when BuildKit's per-instruction hashing matches an
 # older cache entry (which happened to v10.0.1 — see commit history).
-LABEL build.cachebust="v10.0.4-2026-06-23"
+LABEL build.cachebust="v10.0.5-2026-06-23"
 
 USER root
 RUN apk add --no-cache curl
