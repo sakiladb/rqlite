@@ -96,8 +96,17 @@ if [ ! -s "$DATA_DIR/db.sqlite" ]; then
 fi
 start_node
 wait_ready
+# Fail loudly if rqlited reports a FRESH node. The negative log line
+# ("no preexisting node state detected ...") contains the positive substring
+# ("preexisting node state detected"), so a naive positive grep matches both
+# and is useless — check the negative message explicitly first.
+if grep -q 'no preexisting node state detected' /tmp/rqlited.log; then
+    echo "ERROR: restarted node reports NO preexisting state — bake did not persist" >&2
+    cat /tmp/rqlited.log >&2 || true
+    exit 1
+fi
 if ! grep -q 'preexisting node state detected' /tmp/rqlited.log; then
-    echo "ERROR: restarted node did not detect preexisting state — bake is not persistent" >&2
+    echo "ERROR: restarted node never logged a preexisting-state check — cannot confirm persistence" >&2
     cat /tmp/rqlited.log >&2 || true
     exit 1
 fi
