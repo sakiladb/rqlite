@@ -65,6 +65,22 @@ verify_all() {
     assert_count rental 16044
 }
 
+# Poll until the data is queryable, or fail after a bounded wait. Replaces a
+# fixed `sleep` after /boot and after each restart: the boot/commit (and, on
+# restart, leadership + raft replay) can take longer than a couple of seconds
+# under QEMU/CI, so we retry on the actor count rather than guess a duration.
+wait_for_data() {
+    for i in $(seq 1 30); do
+        got=$(curl -sf "http://localhost:4001/db/query?level=strong&q=SELECT+count(*)+FROM+actor" || true)
+        if echo "$got" | grep -q '"values":\[\[200\]\]'; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "ERROR: actor data not queryable within 30s (last response: ${got:-<none>})" >&2
+    return 1
+}
+
 stop_node() {
     kill -TERM "$NODE_PID"
     # A TERM'd process exits non-zero; tolerate ONLY the wait, nothing else.
@@ -82,7 +98,8 @@ echo "  booting $SRC..."
 curl -sf -XPOST -H 'Transfer-Encoding: chunked' \
     --upload-file "$SRC" \
     http://localhost:4001/boot
-sleep 2
+echo "  waiting for booted data to be queryable..."
+wait_for_data
 echo "  verifying running node..."
 verify_all
 stop_node
@@ -104,6 +121,7 @@ fi
 start_node
 wait_ready
 echo "  restarted from baked dir; verifying served data..."
+wait_for_data
 verify_all
 stop_node
 
