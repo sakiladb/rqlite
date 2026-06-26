@@ -58,6 +58,14 @@ ENV DATA_DIR=/var/lib/sakiladb/data
 
 EXPOSE 4001 4002
 
+# Family convention: every sakiladb image declares a HEALTHCHECK using its
+# engine's native readiness probe. rqlite serves an unauthenticated /readyz (the
+# "*" user in auth.json holds the "ready" perm), and busybox wget ships in the
+# base image. wget exits non-zero on a non-2xx response, so the container only
+# reports healthy once the node is ready to serve.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=5 \
+    CMD wget -q -O /dev/null http://localhost:4001/readyz || exit 1
+
 CMD ["-auth=/rqlite/auth.json", \
      "-node-id=1", \
      "-http-adv-addr=rqlite1:4001", \

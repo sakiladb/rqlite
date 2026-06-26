@@ -9,6 +9,19 @@ By default these are created:
 - database: `sakila` (the only database — rqlite is single-database per node)
 - username / password: `sakila` / `p_ssW0rd`
 
+## The dataset
+
+The standard Sakila database: **16 tables + 7 views**, kept consistent with the
+other [`sakiladb`](https://github.com/sakiladb) variants (the `sq` test-fixture
+contract). rqlite is distributed SQLite, so the dataset is a SQLite database
+([`sakila.db`](sakila.db)) baked into the image and served over rqlite's HTTP
+API. `film_text` is a **plain table** (populated from `film`) — SQLite full-text
+search needs an FTS5 virtual table, which is schema-visible and would break the
+16-table count, so it is kept plain for parity with the rest of the family. The
+aggregating views (`film_list`, `nicer_but_slower_film_list`, `actor_info`) use
+a deterministic `ORDER BY` inside `group_concat`, so their output is
+byte-identical to the other variants.
+
 ## Quickstart (single node)
 
 ```shell

@@ -16,6 +16,12 @@
 
 set -euo pipefail
 
+# Requires SQLite >= 3.44: the film_list / nicer_but_slower_film_list / actor_info
+# views use ORDER BY inside group_concat(), which older sqlite3 rejects. If your
+# default sqlite3 is older, point SQLITE3 at a newer one, e.g.:
+#   SQLITE3=/opt/homebrew/opt/sqlite/bin/sqlite3 tools/regenerate-sakila.sh
+SQLITE3="${SQLITE3:-sqlite3}"
+
 SRC="${1:-sakila.db}"
 DST="${2:-sakila.db.new}"
 
@@ -44,7 +50,7 @@ rm -f "$DST"
 # created AFTER the data load — the `*_trigger_ai` triggers rewrite
 # `last_update` to NOW() on every INSERT, so creating them up front would
 # clobber every copied row. ---
-sqlite3 -bail "$DST" <<'SQL'
+"${SQLITE3}" -bail "$DST" <<'SQL'
 BEGIN;
 
 CREATE TABLE actor (
@@ -154,7 +160,7 @@ CREATE TABLE customer (
   last_name VARCHAR(45) NOT NULL,
   email VARCHAR(50) DEFAULT NULL,
   address_id INT NOT NULL,
-  active CHAR(1) DEFAULT 'Y' NOT NULL,
+  active SMALLINT DEFAULT 1 NOT NULL,
   create_date TIMESTAMP NOT NULL,
   last_update TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_customer_store FOREIGN KEY (store_id) REFERENCES store (store_id) ON DELETE NO ACTION ON UPDATE CASCADE,
@@ -221,7 +227,7 @@ SQL
 # $SRC expands; the path has already been rejected if it contains a
 # single quote, so the SQL-string interpolation is safe. FKs are
 # disabled because staff/store form a real reference cycle. ---
-sqlite3 -bail "$DST" <<SQL
+"${SQLITE3}" -bail "$DST" <<SQL
 ATTACH DATABASE '$SRC' AS src;
 PRAGMA foreign_keys = OFF;
 BEGIN;
@@ -235,10 +241,20 @@ INSERT INTO language    SELECT * FROM src.language;
 INSERT INTO category    SELECT * FROM src.category;
 INSERT INTO actor       SELECT * FROM src.actor;
 INSERT INTO film        SELECT * FROM src.film;
-INSERT INTO film_text   SELECT * FROM src.film_text;
+-- film_text is kept a PLAIN table (no FTS — an FTS5 virtual table is
+-- schema-visible and would break the 16-table count), populated from film for
+-- parity with the rest of the sakiladb family. The source db ships it empty.
+INSERT INTO film_text (film_id, title, description)
+    SELECT film_id, title, description FROM film;
 INSERT INTO staff       SELECT * FROM src.staff;
 INSERT INTO store       SELECT * FROM src.store;
-INSERT INTO customer    SELECT * FROM src.customer;
+-- active is now SMALLINT (was CHAR(1) holding '0'/'1' text); CAST so it lands
+-- as an integer rather than inheriting text affinity from the source column.
+INSERT INTO customer (customer_id, store_id, first_name, last_name, email,
+                      address_id, active, create_date, last_update)
+    SELECT customer_id, store_id, first_name, last_name, email,
+           address_id, CAST(active AS INTEGER), create_date, last_update
+    FROM src.customer;
 INSERT INTO inventory   SELECT * FROM src.inventory;
 INSERT INTO rental      SELECT * FROM src.rental;
 INSERT INTO payment     SELECT * FROM src.payment;
@@ -250,7 +266,7 @@ DETACH DATABASE src;
 SQL
 
 # --- Phase 3: indexes, triggers, views (verbatim from source) ---
-sqlite3 -bail "$DST" <<'SQL'
+"${SQLITE3}" -bail "$DST" <<'SQL'
 BEGIN;
 
 CREATE INDEX idx_actor_last_name ON actor(last_name);
@@ -413,6 +429,10 @@ SELECT cu.customer_id AS ID,
 FROM customer AS cu JOIN address AS a ON cu.address_id = a.address_id JOIN city ON a.city_id = city.city_id
     JOIN country ON city.country_id = country.country_id;
 
+-- film_list / nicer_but_slower_film_list aggregate one row per film, with the
+-- actor list collapsed via group_concat. The ORDER BY inside group_concat
+-- (first_name, last_name, actor_id) makes the output deterministic and
+-- byte-identical to the other sakiladb variants (requires SQLite >= 3.44).
 CREATE VIEW film_list
 AS
 SELECT film.film_id AS FID,
@@ -422,10 +442,45 @@ SELECT film.film_id AS FID,
        film.rental_rate AS price,
        film.length AS length,
        film.rating AS rating,
-       actor.first_name||' '||actor.last_name AS actors
+       group_concat(actor.first_name||' '||actor.last_name, ', ' ORDER BY actor.first_name, actor.last_name, actor.actor_id) AS actors
 FROM category LEFT JOIN film_category ON category.category_id = film_category.category_id LEFT JOIN film ON film_category.film_id = film.film_id
         JOIN film_actor ON film.film_id = film_actor.film_id
-    JOIN actor ON film_actor.actor_id = actor.actor_id;
+    JOIN actor ON film_actor.actor_id = actor.actor_id
+GROUP BY film.film_id, film.title, film.description, category.name, film.rental_rate, film.length, film.rating;
+
+CREATE VIEW nicer_but_slower_film_list
+AS
+SELECT film.film_id AS FID,
+       film.title AS title,
+       film.description AS description,
+       category.name AS category,
+       film.rental_rate AS price,
+       film.length AS length,
+       film.rating AS rating,
+       group_concat(upper(substr(actor.first_name,1,1))||lower(substr(actor.first_name,2))||' '||upper(substr(actor.last_name,1,1))||lower(substr(actor.last_name,2)), ', ' ORDER BY actor.first_name, actor.last_name, actor.actor_id) AS actors
+FROM category LEFT JOIN film_category ON category.category_id = film_category.category_id LEFT JOIN film ON film_category.film_id = film.film_id
+        JOIN film_actor ON film.film_id = film_actor.film_id
+    JOIN actor ON film_actor.actor_id = actor.actor_id
+GROUP BY film.film_id, film.title, film.description, category.name, film.rental_rate, film.length, film.rating;
+
+-- actor_info uses a join-back subquery (rather than bare GROUP BY columns) so it
+-- is portable across the family; the inner group_concat is ordered by title and
+-- the outer by category name for deterministic, byte-identical output.
+CREATE VIEW actor_info
+AS
+SELECT a.actor_id, a.first_name, a.last_name,
+       group_concat(cat.cat_line, '; ' ORDER BY cat.name) AS film_info
+FROM actor a
+JOIN (
+  SELECT fa.actor_id AS actor_id, c.name AS name,
+         c.name||': '||group_concat(f.title, ', ' ORDER BY f.title) AS cat_line
+  FROM film_actor fa
+  JOIN film f ON fa.film_id = f.film_id
+  JOIN film_category fc ON f.film_id = fc.film_id
+  JOIN category c ON fc.category_id = c.category_id
+  GROUP BY fa.actor_id, c.category_id, c.name
+) cat ON a.actor_id = cat.actor_id
+GROUP BY a.actor_id, a.first_name, a.last_name;
 
 CREATE VIEW sales_by_film_category
 AS
@@ -484,7 +539,7 @@ echo "Verifying $DST..."
 # checks the exit code explicitly to avoid silently treating an open/parse
 # failure as "clean".
 
-if ! fk_check=$(sqlite3 -bail "$DST" "PRAGMA foreign_key_check;"); then
+if ! fk_check=$("${SQLITE3}" -bail "$DST" "PRAGMA foreign_key_check;"); then
     echo "ERROR: foreign_key_check failed to run against $DST" >&2
     exit 1
 fi
@@ -494,7 +549,7 @@ if [[ -n "$fk_check" ]]; then
     exit 1
 fi
 
-if ! integrity=$(sqlite3 -bail "$DST" "PRAGMA integrity_check;"); then
+if ! integrity=$("${SQLITE3}" -bail "$DST" "PRAGMA integrity_check;"); then
     echo "ERROR: integrity_check failed to run against $DST" >&2
     exit 1
 fi
@@ -504,13 +559,14 @@ if [[ "$integrity" != "ok" ]]; then
 fi
 
 # Row-count parity vs source. List must stay in sync with the Phase 1
-# CREATE TABLEs above.
-for t in actor address category city country customer film film_actor film_category film_text inventory language payment rental staff store; do
-    if ! src_n=$(sqlite3 -bail "$SRC" "SELECT COUNT(*) FROM $t;"); then
+# CREATE TABLEs above. film_text is excluded: the source ships it empty and we
+# repopulate it from film, so it is checked separately below.
+for t in actor address category city country customer film film_actor film_category inventory language payment rental staff store; do
+    if ! src_n=$("${SQLITE3}" -bail "$SRC" "SELECT COUNT(*) FROM $t;"); then
         echo "ERROR: failed to count $t in $SRC" >&2
         exit 1
     fi
-    if ! dst_n=$(sqlite3 -bail "$DST" "SELECT COUNT(*) FROM $t;"); then
+    if ! dst_n=$("${SQLITE3}" -bail "$DST" "SELECT COUNT(*) FROM $t;"); then
         echo "ERROR: failed to count $t in $DST" >&2
         exit 1
     fi
@@ -520,23 +576,33 @@ for t in actor address category city country customer film film_actor film_categ
     fi
 done
 
-# View parity vs source: catches the class of mistake where Phase 3 forgets
-# to recreate one of the embedded views.
-if ! src_views=$(sqlite3 -bail "$SRC" "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;"); then
-    echo "ERROR: failed to list views in $SRC" >&2
+# film_text is repopulated from film, so it must have one row per film.
+if ! ft_check=$("${SQLITE3}" -bail "$DST" \
+    "SELECT (SELECT COUNT(*) FROM film_text) - (SELECT COUNT(*) FROM film);"); then
+    echo "ERROR: failed to count film_text/film in $DST" >&2
     exit 1
 fi
-if ! dst_views=$(sqlite3 -bail "$DST" "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;"); then
-    echo "ERROR: failed to list views in $DST" >&2
-    exit 1
-fi
-if [[ "$src_views" != "$dst_views" ]]; then
-    echo "ERROR: view set differs from source" >&2
-    diff <(echo "$src_views") <(echo "$dst_views") >&2 || true
+if [[ "$ft_check" != "0" ]]; then
+    echo "ERROR: film_text row count does not match film (delta=$ft_check)" >&2
     exit 1
 fi
 
-sqlite3 -bail "$DST" "VACUUM;"
+# View-set check against the expected 7 (the sakiladb fixture contract:
+# 16 tables + 7 views). The source ships only 5 views — film_list is rewritten
+# and nicer_but_slower_film_list + actor_info are added — so this asserts the
+# expected set literally rather than comparing to the source.
+expected_views=$'actor_info\ncustomer_list\nfilm_list\nnicer_but_slower_film_list\nsales_by_film_category\nsales_by_store\nstaff_list'
+if ! dst_views=$("${SQLITE3}" -bail "$DST" "SELECT name FROM sqlite_master WHERE type='view' ORDER BY name;"); then
+    echo "ERROR: failed to list views in $DST" >&2
+    exit 1
+fi
+if [[ "$dst_views" != "$expected_views" ]]; then
+    echo "ERROR: view set differs from the expected 7" >&2
+    diff <(echo "$expected_views") <(echo "$dst_views") >&2 || true
+    exit 1
+fi
+
+"${SQLITE3}" -bail "$DST" "VACUUM;"
 
 echo "OK. $DST regenerated from $SRC."
 echo "  size: $(wc -c < "$DST" | tr -d ' ') bytes"
