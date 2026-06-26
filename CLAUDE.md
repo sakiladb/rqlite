@@ -85,9 +85,11 @@ family convention (every variant declares a `HEALTHCHECK` using its engine's nat
 *(Shared across the family — see `sakiladb/postgres` `CLAUDE.md` for the full description.)* Releases
 are **tag-driven**: `.github/workflows/docker-publish.yml` builds on every push / PR / tag but only
 **pushes on a `v*.*.*` tag**. The Docker tag is the major (`type=semver,pattern={{major}}` → `10`),
-built multi-arch (`linux/amd64,linux/arm64`) and cosign-signed. rqlite currently has a **single
-major (`10`)**, so `latest` (emitted by `docker/metadata-action`'s default `latest=auto`) always
-tracks it — no `LATEST_MAJOR` gating is needed here yet.
+built multi-arch (`linux/amd64,linux/arm64`), pushed to **both Docker Hub and GHCR**
+(`ghcr.io/sakiladb/rqlite`), and cosign-signed. rqlite currently has a **single major (`10`)**, so
+`latest` (emitted by `docker/metadata-action`'s default `latest=auto`) always tracks it — no
+`LATEST_MAJOR` gating is needed here yet (unlike `postgres`/`mysql`, which gate `latest` on a
+`LATEST_MAJOR` env var because they publish several majors).
 
 The git tag is `v{RQLITE_MAJOR}.{MINOR}.{PATCH}` — the major tracks rqlite's upstream major
 (`ARG RQLITE_VERSION` in the `Dockerfile`, currently `10.2.0`); the minor/patch track sakiladb's own
@@ -98,9 +100,11 @@ revisions (in practice only the patch moves). To republish, bump to the next unu
 git tag v10.0.7 && git push origin v10.0.7   # builds & publishes `10` + `latest`
 ```
 
-> **Parity gap:** unlike `postgres`/`mysql`, this workflow pushes to **Docker Hub only** — it has no
-> GHCR target. Adding GHCR (a second `docker/login-action` + `ghcr.io/...` image in the metadata
-> step) is the remaining step to bring the publish pipeline fully in line with the family template.
+> **First GHCR publish:** GHCR was added to the workflow on top of `v10.0.7` (which had shipped to
+> Docker Hub only). The `ghcr.io/sakiladb/rqlite` package is created by the first tag build that runs
+> with the GHCR target; a new GHCR package defaults to **private**, so set its visibility to public
+> once (GitHub ▸ the package ▸ Package settings) — thereafter every tagged release pushes both
+> registries automatically.
 
 ## Conventions
 
