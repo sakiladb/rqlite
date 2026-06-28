@@ -1,5 +1,7 @@
 name: Docker
 
+# TEMP: PR to verify the SHA-pinned actions resolve and run. Close without merging.
+
 on:
   push:
     branches: [ "master", "rqlite-*" ]
