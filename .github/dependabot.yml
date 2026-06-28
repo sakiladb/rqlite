@@ -1,0 +1,17 @@
+# Keep the GitHub Actions in docker-publish.yml up to date.
+# https://docs.github.com/github/administering-a-repository/configuration-options-for-dependency-updates
+#
+# No "docker" ecosystem entry: the Dockerfile base image tag comes from a
+# build ARG (rqlite/rqlite:${RQLITE_VERSION}), which Dependabot's docker
+# updater does not track.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        update-types:
+          - "minor"
+          - "patch"
