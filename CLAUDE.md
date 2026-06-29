@@ -5,7 +5,7 @@ with the [Sakila](https://dev.mysql.com/doc/sakila/en/) sample database (via
 [jOOQ](https://www.jooq.org/sakila)), published to
 [Docker Hub](https://hub.docker.com/r/sakiladb/rqlite).
 
-> One of the [`sakiladb`](https://github.com/sakiladb) image family (`postgres`, `mysql`,
+> One of the [`sakiladb`](https://github.com/sakiladb) image family (`postgres`, `mysql`, `mariadb`,
 > `sqlserver`, `oracle`, `clickhouse`, `rqlite`). The **reference template** for the family —
 > the shared release machinery, the porting checklist, and the canonical prose — lives in
 > [`sakiladb/postgres`](https://github.com/sakiladb/postgres) (its `CLAUDE.md`). This file
