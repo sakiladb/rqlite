@@ -168,7 +168,7 @@ Each rqlite major version is published as its own image tag. `latest` tracks the
 
 | rqlite | sakiladb Release | Architecture     | Docker Hub                       | GitHub Container Registry                |
 |--------|------------------|------------------|----------------------------------|------------------------------------------|
-| 10     | `v10.0.10`       | `amd64`, `arm64` | [`sakiladb/rqlite:10`](https://hub.docker.com/r/sakiladb/rqlite), [`:latest`](https://hub.docker.com/r/sakiladb/rqlite) | [`ghcr.io/sakiladb/rqlite:10`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite), [`:latest`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite) |
+| 10     | `v10.0.12`       | `amd64`, `arm64` | [`sakiladb/rqlite:10`](https://hub.docker.com/r/sakiladb/rqlite), [`:latest`](https://hub.docker.com/r/sakiladb/rqlite) | [`ghcr.io/sakiladb/rqlite:10`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite), [`:latest`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite) |
 
 The image tag tracks the **rqlite major version**. **sakiladb Release** is the git tag the current
 image was built from (see [releases](https://github.com/sakiladb/rqlite/releases)); the version is
@@ -251,6 +251,10 @@ major version; the version is derived from the tag, so there are no per-version 
 
 ### 2026-06-28
 
+- **macOS-actionable docs** (`v10.0.12`): reworked the CLI and cluster guidance for Docker Desktop /
+  Colima (native `brew install rqlite`, a `host.docker.internal` form for the dockerized CLI, and
+  querying the cluster from the host with `disableClusterDiscovery`). The Sakila dataset and schema
+  are unchanged.
 - **Aligned two views with the canonical Sakila.** `sales_by_store` no longer carries a stray leading
   `store_id` column (it is now `store, manager, total_sales`), and `customer_list` / `staff_list` use
   the canonical `zip code` alias (was `zip_code`). The column set is now in exact parity with the rest
