@@ -420,7 +420,7 @@ AS
 SELECT cu.customer_id AS ID,
        cu.first_name||' '||cu.last_name AS name,
        a.address AS address,
-       a.postal_code AS zip_code,
+       a.postal_code AS "zip code",
        a.phone AS phone,
        city.city AS city,
        country.country AS country,
@@ -498,8 +498,7 @@ GROUP BY c.name;
 CREATE VIEW sales_by_store
 AS
 SELECT
-  s.store_id
- ,c.city||','||cy.country AS store
+  c.city||','||cy.country AS store
  ,m.first_name||' '||m.last_name AS manager
  ,SUM(p.amount) AS total_sales
 FROM payment AS p
@@ -520,7 +519,7 @@ AS
 SELECT s.staff_id AS ID,
        s.first_name||' '||s.last_name AS name,
        a.address AS address,
-       a.postal_code AS zip_code,
+       a.postal_code AS "zip code",
        a.phone AS phone,
        city.city AS city,
        country.country AS country,
