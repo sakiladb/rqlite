@@ -77,17 +77,28 @@ actor_id  first_name  last_name     last_update
 5         JOHNNY      LOLLOBRIGIDA  2006-02-15T04:34:33Z
 ```
 
-The rqlite CLI also works:
+The [rqlite CLI](https://rqlite.io/docs/cli/) also works. Install it natively (`brew install rqlite`
+on macOS) and run it against the published port; it defaults to `127.0.0.1:4001`, so no flags are
+needed beyond the credentials:
 
 ```shell
-$ docker run --rm -it --network host rqlite/rqlite -H localhost -P 4001 \
-        --user sakila:p_ssW0rd
+$ rqlite --user sakila:p_ssW0rd
 127.0.0.1:4001> SELECT count(*) FROM film;
 +----------+
 | count(*) |
 +----------+
 | 1000     |
 +----------+
+```
+
+To run the CLI from the `rqlite/rqlite` image instead of installing it, override the entrypoint (the
+image's default entrypoint is the *server*). On Docker Desktop or Colima (macOS), reach the published
+port via `host.docker.internal`, **not** `--network host`, which on macOS attaches to the Docker VM
+rather than your laptop (on Linux, `--network host` with `-H localhost` works):
+
+```shell
+docker run --rm -i --entrypoint rqlite rqlite/rqlite \
+    -H host.docker.internal -p 4001 --user sakila:p_ssW0rd
 ```
 
 ## What's inside
@@ -197,6 +208,32 @@ port 4001: Leader
 port 4003: Follower
 port 4005: Follower
 ```
+
+### Querying the cluster from your host
+
+Every node's HTTP port is published, so you can query any node directly from your laptop. Point your
+client at the node's port and disable cluster discovery:
+
+```shell
+# the leader (reads + writes), on 4001
+sq add 'rqlite://sakila:p_ssW0rd@localhost:4001?disableClusterDiscovery=true' --handle @rq_leader
+
+# a follower (reads), on 4003
+sq add 'rqlite://sakila:p_ssW0rd@localhost:4003?disableClusterDiscovery=true' --handle @rq_follower
+```
+
+> **Why `disableClusterDiscovery`, and what this means on macOS.** Left to discover the cluster, a
+> client follows rqlite's leader-redirect to each node's *advertised* address (`rqlite1`, `rqlite2`,
+> ...). Those names resolve inside the Docker network but not from your host, so discovery fails with
+> `advertised peer "rqlite1" is not resolvable from this host`. This is true on every OS: Docker
+> Desktop and Colima on macOS don't change it, and `--network host` won't help (on macOS it attaches
+> to the Docker VM, not your laptop). Disabling discovery makes the client talk to the published port
+> directly, which is all you need to query the fixture.
+>
+> To exercise the *real* discovery + leader-redirect path locally, run a **native** cluster instead of
+> the Docker one: rqlite's [`sakila-start-rqlite-cluster.sh`](https://github.com/neilotoole/sq/blob/master/drivers/rqlite/sakila-start-rqlite-cluster.sh)
+> (`brew install rqlite`) starts three nodes bound to `127.0.0.1`, so discovery returns
+> host-reachable addresses and `sq` connects without `disableClusterDiscovery`.
 
 Tear down:
 
