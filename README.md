@@ -40,6 +40,10 @@ until [ "$(docker inspect -f '{{.State.Health.Status}}' sakila)" = healthy ]; do
 
 In Docker Compose, gate dependents with `depends_on: { condition: service_healthy }`.
 
+When you are done, remove the container (`docker rm -f sakila` for the named form above, or
+`docker rm -f $(docker ps -q --filter ancestor=sakiladb/rqlite:latest)` for the unnamed Quick-start
+container).
+
 ## Connection
 
 | Setting   | Value       |
@@ -61,8 +65,11 @@ $ curl -u sakila:p_ssW0rd \
 ```
 
 With [`sq`](https://github.com/neilotoole/sq) ([install](https://sq.io/docs/install)), use the
-`rqlite://` scheme. The single-node image advertises the internal hostname `rqlite1`, which a host
-client cannot resolve, so add `?disableClusterDiscovery=true` to connect to it directly:
+`rqlite://` scheme. Because this is a single node advertising a container-internal hostname
+(`rqlite1`), add `?disableClusterDiscovery=true` so the client talks to the published port directly.
+The flag is specific to this single-node-on-Docker topology, not a requirement of the driver: a real
+multi-node cluster whose peer hostnames are resolvable from the client leaves discovery on (the
+default) so leader redirects and failover work automatically.
 
 ```shell
 $ sq add 'rqlite://sakila:p_ssW0rd@localhost:4001?disableClusterDiscovery=true' --handle @sakila_rq
@@ -146,9 +153,11 @@ staff_list                  view   2      ID, name, address, zip code, phone, ci
 The object set and row data match the family, but rqlite is distributed SQLite, so a few engine
 traits differ:
 
-- **`sq` uses the rqlite driver, with `?disableClusterDiscovery=true`.** A node advertises its
-  cluster hostname (`rqlite1` for the single-node image), which a host client cannot resolve, so the
-  connection disables discovery and talks to the node directly. `sq inspect` reports `DRIVER: rqlite`.
+- **`sq` uses the rqlite driver.** `sq inspect` reports `DRIVER: rqlite`. Reaching the single-node
+  image from the host needs `?disableClusterDiscovery=true`, because the node advertises a
+  container-internal hostname (`rqlite1`) the host cannot resolve. That is a trait of this single-node
+  Docker setup, not the driver: a real multi-node cluster with host-resolvable peers leaves discovery
+  on (the default) for leader redirects and failover.
 - **`film_text` is a plain table** (populated from `film`). SQLite full-text search needs an FTS5
   virtual table, which is schema-visible and would push the count past 16, so (like the `sqlite`,
   `duckdb`, and `oracle` variants) full-text search is omitted for parity.
