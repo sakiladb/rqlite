@@ -55,6 +55,8 @@ jobs:
       # This is used to complete the identity challenge
       # with sigstore/fulcio when running outside of PRs.
       id-token: write
+      # Lets the attest-build-provenance / attest steps write attestations.
+      attestations: write
 
     steps:
       - name: Checkout repository
@@ -140,6 +142,85 @@ jobs:
           TAGS: ${{ steps.meta.outputs.tags }}
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: echo "$TAGS" | xargs -I {} cosign sign --yes {}@"$DIGEST"
+
+      # SLSA build provenance, attached to the pushed image as an OCI referrer.
+      # Same digest across registries, so the two steps differ only in
+      # subject-name. Attests an already-pushed digest; also recorded in the
+      # GitHub attestation store.
+      - name: Attest provenance (Docker Hub)
+        if: ${{ env.IS_RELEASE == 'true' }}
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest provenance (GHCR)
+        if: ${{ env.IS_RELEASE == 'true' }}
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          push-to-registry: true
+
+      # SPDX SBOM, attested to each registry as an OCI referrer.
+      - name: Generate SBOM
+        if: ${{ env.IS_RELEASE == 'true' }}
+        # Strip per-file metadata: syft's default file cataloging records
+        # per-file digests/metadata for every file, which on larger images pushes
+        # the SPDX past actions/attest's 16 MiB predicate limit. Keeps the package
+        # inventory (what vuln scanners consume) and drops the heavy per-file data.
+        env:
+          SYFT_FILE_METADATA_SELECTION: none
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
+        with:
+          image: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      # Unified actions/attest (actions/attest-sbom is deprecated).
+      - name: Attest SBOM (Docker Hub)
+        if: ${{ env.IS_RELEASE == 'true' }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY_DOCKERHUB }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          predicate-type: https://spdx.dev/Document
+          predicate-path: sbom.spdx.json
+          push-to-registry: true
+
+      - name: Attest SBOM (GHCR)
+        if: ${{ env.IS_RELEASE == 'true' }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build-and-push.outputs.digest }}
+          predicate-type: https://spdx.dev/Document
+          predicate-path: sbom.spdx.json
+          push-to-registry: true
+
+      # Independently verify what we just pushed (a green attest step means
+      # "uploaded", not "verifiable"). GitHub's store is the hard gate; the
+      # registry referrer (Scout-facing) is retried to absorb post-push lag.
+      - name: Verify attestations
+        if: ${{ env.IS_RELEASE == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          SPDX=https://spdx.dev/Document
+          retry() { local n=0; until "$@"; do n=$((n+1)); [ "$n" -ge 5 ] && return 1; echo "not ready (attempt $n), retrying..."; sleep 6; done; }
+          for reg in "$REGISTRY_DOCKERHUB" "$REGISTRY_GHCR"; do
+            ref="oci://$reg/${IMAGE_NAME}@${DIGEST}"
+            echo "::group::verify $ref"
+            gh attestation verify "$ref" --repo "$IMAGE_NAME"
+            gh attestation verify "$ref" --repo "$IMAGE_NAME" --predicate-type "$SPDX"
+            retry gh attestation verify "$ref" --repo "$IMAGE_NAME" --bundle-from-oci
+            retry gh attestation verify "$ref" --repo "$IMAGE_NAME" --bundle-from-oci --predicate-type "$SPDX"
+            echo "::endgroup::"
+          done
+          echo "All attestations verified (provenance + SBOM, store + referrer) on both registries."
 
       # Sync this repo's README to the Docker Hub repository's full description
       # on release (cosmetic; the image is already published above). The curated
