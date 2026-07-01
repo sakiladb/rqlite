@@ -182,7 +182,7 @@ Each rqlite major version is published as its own image tag. `latest` tracks the
 
 | rqlite | sakiladb Release | Architecture     | Docker Hub                       | GitHub Container Registry                |
 |--------|------------------|------------------|----------------------------------|------------------------------------------|
-| 10     | `v10.0.12`       | `amd64`, `arm64` | [`sakiladb/rqlite:10`](https://hub.docker.com/r/sakiladb/rqlite), [`:latest`](https://hub.docker.com/r/sakiladb/rqlite) | [`ghcr.io/sakiladb/rqlite:10`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite), [`:latest`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite) |
+| 10     | `v10.0.13`       | `amd64`, `arm64` | [`sakiladb/rqlite:10`](https://hub.docker.com/r/sakiladb/rqlite), [`:latest`](https://hub.docker.com/r/sakiladb/rqlite) | [`ghcr.io/sakiladb/rqlite:10`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite), [`:latest`](https://github.com/sakiladb/rqlite/pkgs/container/rqlite) |
 
 The image tag tracks the **rqlite major version**. **sakiladb Release** is the git tag the current
 image was built from (see [releases](https://github.com/sakiladb/rqlite/releases)); the version is
@@ -191,7 +191,9 @@ image was built from (see [releases](https://github.com/sakiladb/rqlite/releases
 releases all surface as `:10`). Every version is published to both
 [Docker Hub](https://hub.docker.com/r/sakiladb/rqlite) and
 [GitHub Container Registry](https://github.com/sakiladb/rqlite/pkgs/container/rqlite), built for
-`amd64` + `arm64`, and signed with [cosign](https://github.com/sigstore/cosign).
+`amd64` + `arm64`, and signed with [cosign](https://github.com/sigstore/cosign). Each image also
+carries [SLSA build provenance](https://slsa.dev/) and an SPDX [SBOM](https://spdx.dev/) attestation
+(verify with `gh attestation verify`).
 
 ## Running a 3-node cluster
 
@@ -262,6 +264,15 @@ major version; the version is derived from the tag, so there are no per-version 
 [CLAUDE.md](./CLAUDE.md) for the full, repeatable procedure.
 
 ## Changelog
+
+### 2026-06-30
+
+- **Supply-chain attestations** (`v10.0.13`): published images now carry
+  [SLSA build provenance](https://slsa.dev/) and an SPDX [SBOM](https://spdx.dev/)
+  attestation, alongside the existing cosign signature (pushed to Docker Hub and
+  GHCR as OCI referrers and to GitHub's attestation store; verify with
+  `gh attestation verify`). Each release also self-verifies its attestations. The
+  dataset and schema are unchanged.
 
 ### 2026-06-28
 
