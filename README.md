@@ -44,6 +44,11 @@ When you are done, remove the container (`docker rm -f sakila` for the named for
 `docker rm -f $(docker ps -q --filter ancestor=sakiladb/rqlite:latest)` for the unnamed Quick-start
 container).
 
+> [!TIP]
+> Building or testing on GitHub Actions? Pull from GHCR (`ghcr.io/sakiladb/rqlite`). Docker Hub
+> rate-limits pulls and CI runners share IP addresses, so the limit is reached quickly; GHCR isn't
+> throttled the same way, especially from within GitHub's network.
+
 ## Connection
 
 | Setting   | Value       |
